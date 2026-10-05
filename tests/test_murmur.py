@@ -1,7 +1,9 @@
 import json
 from datetime import timedelta
 
-from murmur import cd_to_unix, decide, tsrp_text
+import pytest
+
+from murmur import APP_SUPPORT, MODEL_FILE, cd_to_unix, decide, download, find_model, own_model, tsrp_text
 
 RUNS = ["Hello", {"timeRange": [0, 1]}, " world", {"timeRange": [1, 2]}]
 
@@ -35,3 +37,31 @@ def test_decide():
     assert decide(False, None, young) is None
     assert decide(False, None, old) == "whisper"
     assert decide(False, None, None) == "whisper"  # transcribe: no age rule
+
+
+def test_find_model_order(tmp_path):
+    assert find_model(tmp_path, None) is None
+    vibe = tmp_path / APP_SUPPORT / "github.com.thewh1teagle.vibe" / MODEL_FILE
+    vibe.parent.mkdir(parents=True)
+    vibe.touch()
+    assert find_model(tmp_path, None) == vibe
+    own = own_model(tmp_path)
+    own.parent.mkdir(parents=True)
+    own.touch()
+    assert find_model(tmp_path, None) == own  # own dir before Vibe
+    env = tmp_path / "custom.bin"
+    env.touch()
+    assert find_model(tmp_path, str(env)) == env  # env var wins
+    assert find_model(tmp_path, str(tmp_path / "nope.bin")) is None  # set env is authoritative
+
+
+def test_download_part_then_rename(tmp_path):
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"x" * 3000)
+    dest = tmp_path / "models" / MODEL_FILE
+    download(src.as_uri(), dest)
+    assert dest.read_bytes() == src.read_bytes()
+    assert not dest.with_name(dest.name + ".part").exists()
+    with pytest.raises(OSError):
+        download((tmp_path / "missing.bin").as_uri(), tmp_path / "out.bin")
+    assert not (tmp_path / "out.bin").exists()

@@ -6,23 +6,81 @@ import json
 import mmap
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
 import unicodedata
+import urllib.request
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 REC = Path.home() / "Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings"
-MODEL = os.environ.get(
-    "MURMUR_MODEL",
-    str(Path.home() / "Library/Application Support/github.com.thewh1teagle.vibe/ggml-large-v3-turbo.bin"),
-)
+MODEL_FILE = "ggml-large-v3-turbo.bin"
+MODEL_URL = f"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{MODEL_FILE}"
+APP_SUPPORT = "Library/Application Support"
 CORE_DATA_EPOCH = 978307200
 FRESH = timedelta(days=2)  # Apple writes tsrp late; wait this long before falling back to whisper
-os.environ["PATH"] += ":/opt/homebrew/bin"  # unattended runs (launchd) lack brew on PATH
+for _d in ("/usr/local/bin", "/opt/homebrew/bin"):  # unattended runs (launchd) lack brew on PATH
+    if Path(_d).is_dir() and _d not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = _d + os.pathsep + os.environ.get("PATH", "")
+
+
+def own_model(home: Path = Path.home()) -> Path:
+    return home / APP_SUPPORT / "murmur" / MODEL_FILE
+
+
+def find_model(home: Path = Path.home(), env: str | None = os.environ.get("MURMUR_MODEL")) -> Path | None:
+    """$MURMUR_MODEL (authoritative when set) -> murmur's own dir -> Vibe's copy, if one happens to exist."""
+    if env:
+        return p if (p := Path(env).expanduser()).exists() else None
+    vibe = home / APP_SUPPORT / "github.com.thewh1teagle.vibe" / MODEL_FILE
+    return next((p for p in (own_model(home), vibe) if p.exists()), None)
+
+
+def model() -> str:
+    """Never downloads: sync runs unattended. A missing model means `murmur setup` hasn't run."""
+    if not (m := find_model()):
+        sys.exit("murmur: no whisper model found; run `murmur setup` (or set MURMUR_MODEL)")
+    return str(m)
+
+
+def download(url: str, dest: Path) -> None:
+    """Stream to dest.part, rename on completion so dest is never a truncated model."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    with urllib.request.urlopen(url) as r, open(part, "wb") as f:
+        total, done, shown = int(r.headers.get("Content-Length") or 0), 0, 0
+        while chunk := r.read(1 << 20):
+            f.write(chunk)
+            done += len(chunk)
+            if total and done * 10 // total > shown:
+                shown = done * 10 // total
+                print(f"  {shown * 10}%  {done >> 20} MB", flush=True)
+    if total and done != total:
+        raise OSError(f"short download: {done} of {total} bytes")
+    os.replace(part, dest)
+
+
+def setup() -> int:
+    """Idempotent: check tools, fetch the model only if none resolves."""
+    brew = {"ffmpeg": "ffmpeg", "whisper-cli": "whisper-cpp"}
+    missing = [t for t in brew if not shutil.which(t)]
+    for t in missing:
+        print(f"missing  {t}  ->  brew install {brew[t]}")
+    if m := find_model():
+        print(f"model    {m}")
+    elif env := os.environ.get("MURMUR_MODEL"):
+        print(f"model    MURMUR_MODEL={env} does not exist; fix it or unset it")
+        return 1
+    else:
+        dest = own_model()
+        print(f"downloading {MODEL_URL} (~1.6 GB) -> {dest}")
+        download(MODEL_URL, dest)
+        print(f"model    {dest}")
+    return 1 if missing else 0
 
 
 def cd_to_unix(ts: float) -> float:
@@ -80,8 +138,8 @@ def to_wav(src: Path):
         yield wav
 
 
-def whisper(wav: Path, *args: str) -> tuple[str, str | None]:
-    p = subprocess.run(["whisper-cli", "-m", MODEL, "-f", str(wav), *args],
+def whisper(mdl: str, wav: Path, *args: str) -> tuple[str, str | None]:
+    p = subprocess.run(["whisper-cli", "-m", mdl, "-f", str(wav), *args],
                        capture_output=True, text=True, check=True)
     m = re.search(r"auto-detected language: (\w+)", p.stderr)
     return "\n".join(l.strip() for l in p.stdout.splitlines() if l.strip()), m and m.group(1)
@@ -92,11 +150,12 @@ def transcribe(path: Path, age: timedelta | None = None) -> tuple[str, str, str 
     apple = apple_transcript(path)
     if decide(bool(apple), None, age) is None:
         return None
+    mdl = model()  # every memo with work to do needs whisper, if only for the language gate
     with to_wav(path) as wav:
-        lang = whisper(wav, "-l", "auto", "-dl")[1] if apple else None
+        lang = whisper(mdl, wav, "-l", "auto", "-dl")[1] if apple else None
         if decide(bool(apple), lang, age) == "apple":
             return apple, "apple", lang
-        text, lang = whisper(wav, "-l", "auto", "-nt")
+        text, lang = whisper(mdl, wav, "-l", "auto", "-nt")
         return text, "whisper", lang
 
 
@@ -168,6 +227,7 @@ def main() -> None:
     sy.add_argument("--force", action="store_true")
     tr = sub.add_parser("transcribe")
     tr.add_argument("target", help="memo id, filename, or path")
+    sub.add_parser("setup", help="check ffmpeg/whisper-cli, download the model if none is found")
     a = ap.parse_args()
 
     if a.cmd == "list":
@@ -179,6 +239,8 @@ def main() -> None:
         for r in [] if a.json else rows:
             print(f"{r['date'][:16]}  {r['duration']:>5}s  {'T' if r['has_apple_transcript'] else '-'}  "
                   f"{r['title']:<24}  {r['id']}")
+    elif a.cmd == "setup":
+        sys.exit(setup())
     elif a.cmd == "sync":
         sys.exit(sync(a.out.expanduser(), a.since, a.force))
     else:
