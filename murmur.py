@@ -134,7 +134,7 @@ def to_wav(src: Path):
     with tempfile.TemporaryDirectory() as d:
         wav = Path(d) / "a.wav"
         subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(src),
-                        "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(wav)], check=True)
+                        "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(wav)], capture_output=True, text=True, check=True)
         yield wav
 
 
@@ -145,8 +145,14 @@ def whisper(mdl: str, wav: Path, *args: str) -> tuple[str, str | None]:
     return "\n".join(l.strip() for l in p.stdout.splitlines() if l.strip()), m and m.group(1)
 
 
+class Evicted(Exception):
+    """Memo audio is in iCloud, not on disk."""
+
+
 def transcribe(path: Path, age: timedelta | None = None) -> tuple[str, str, str | None] | None:
     """-> (text, source, language), or None to wait."""
+    if not path.exists():
+        raise Evicted(path)
     apple = apple_transcript(path)
     if decide(bool(apple), None, age) is None:
         return None
@@ -186,11 +192,11 @@ def sync(out: Path, since: date | None, force: bool) -> int:
     for m in memos():
         if (since and m["date"].date() < since) or m["id"] in done:
             continue
-        if not m["path"].exists():
-            print(f"evicted  {m['date']:%Y-%m-%d %H:%M}  {m['title']}  (audio in iCloud)")
-            continue
         try:
             r = transcribe(m["path"], now - m["date"])
+        except Evicted:
+            print(f"evicted  {m['date']:%Y-%m-%d %H:%M}  {m['title']}  (audio in iCloud)")
+            continue
         except subprocess.CalledProcessError as e:
             failed += 1
             print(f"failed   {m['date']:%Y-%m-%d %H:%M}  {m['title']}  ({e.cmd[0]} exit {e.returncode})")
@@ -229,7 +235,18 @@ def main() -> None:
     tr.add_argument("target", help="memo id, filename, or path")
     sub.add_parser("setup", help="check ffmpeg/whisper-cli, download the model if none is found")
     a = ap.parse_args()
+    try:
+        run(a)
+    except Evicted:
+        sys.exit("murmur: audio not on disk (in iCloud) — open it in Voice Memos to download")
+    except subprocess.CalledProcessError as e:
+        why = (e.stderr or "").strip().splitlines()[-1:]
+        sys.exit(f"murmur: {e.cmd[0]} failed (exit {e.returncode})" + "".join(f": {w}" for w in why))
+    except FileNotFoundError as e:  # ffmpeg / whisper-cli not on PATH
+        sys.exit(f"murmur: {e.filename or e} not found; run `murmur setup`")
 
+
+def run(a: argparse.Namespace) -> None:
     if a.cmd == "list":
         rows = [dict(date=m["date"].isoformat(timespec="seconds"), duration=m["duration"], title=m["title"],
                      id=m["id"], has_apple_transcript=bool(apple_transcript(m["path"])))

@@ -3,7 +3,7 @@ from datetime import timedelta
 
 import pytest
 
-from murmur import APP_SUPPORT, MODEL_FILE, cd_to_unix, decide, download, find_model, own_model, tsrp_text
+from murmur import APP_SUPPORT, MODEL_FILE, Evicted, cd_to_unix, decide, download, find_model, own_model, transcribe, tsrp_text
 
 RUNS = ["Hello", {"timeRange": [0, 1]}, " world", {"timeRange": [1, 2]}]
 
@@ -65,3 +65,8 @@ def test_download_part_then_rename(tmp_path):
     with pytest.raises(OSError):
         download((tmp_path / "missing.bin").as_uri(), tmp_path / "out.bin")
     assert not (tmp_path / "out.bin").exists()
+
+
+def test_transcribe_evicted_raises(tmp_path):
+    with pytest.raises(Evicted):
+        transcribe(tmp_path / "gone.m4a")
