@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "murmur"
+version = "0.1.0"
+description = "Turn Apple Voice Memos into markdown transcripts"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "Rafael Ballestiero", email = "rafaba@hey.com"}
+]
+keywords = ["voice-memos", "transcription", "whisper", "markdown", "cli"]
+dependencies = []
+
+[project.scripts]
+murmur = "murmur:main"
+
+[dependency-groups]
+dev = ["pytest>=8.3.5"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
