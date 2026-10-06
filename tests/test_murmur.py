@@ -1,9 +1,10 @@
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import pytest
 
-from murmur import APP_SUPPORT, MODEL_FILE, Evicted, cd_to_unix, decide, download, find_model, own_model, transcribe, tsrp_text
+import murmur
+from murmur import APP_SUPPORT, MODEL_FILE, Evicted, cd_to_unix, decide, download, find_model, own_model, transcribe, tsrp_text, whisper
 
 RUNS = ["Hello", {"timeRange": [0, 1]}, " world", {"timeRange": [1, 2]}]
 
@@ -70,3 +71,32 @@ def test_download_part_then_rename(tmp_path):
 def test_transcribe_evicted_raises(tmp_path):
     with pytest.raises(Evicted):
         transcribe(tmp_path / "gone.m4a")
+
+
+def test_whisper_survives_split_utf8(tmp_path, monkeypatch):
+    fake = tmp_path / "whisper-cli"  # whisper.cpp emits a lone 0xeb mid-sentence, as in the real crash
+    fake.write_text("#!/bin/sh\nprintf 'ol\\303\\241 n\\353o\\n'\nprintf 'auto-detected language: pt\\n' >&2\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{tmp_path}:{__import__('os').environ['PATH']}")
+    text, lang = whisper("model.bin", tmp_path / "a.wav")
+    assert text == "ol\u00e1 n\ufffdo" and lang == "pt"
+
+
+def test_sync_continues_past_a_failing_memo(tmp_path, monkeypatch, capsys):
+    when = datetime(2023, 7, 7, 16, 7).astimezone()
+    memo = lambda i: dict(id=i, date=when, duration=1, title=i, path=tmp_path / i)
+    def fake(path, age):
+        if path.name == "bad":
+            raise UnicodeDecodeError("utf-8", b"\xeb", 0, 1, "invalid continuation byte")
+        if path.name == "cloud":
+            raise Evicted(path)
+        return "hi", "whisper", "pt"
+    monkeypatch.setattr(murmur, "transcribe", fake)
+    monkeypatch.setattr(murmur, "memos", lambda: [memo("bad"), memo("cloud"), memo("ok")])
+    out = tmp_path / "out"
+    assert murmur.sync(out, None, False) == 1  # a failure -> exit 1, after finishing the loop
+    log = capsys.readouterr().out
+    assert "failed" in log and "UnicodeDecodeError" in log and "evicted" in log
+    assert [f.name for f in out.glob("*.md")] == ["2023-07-07-1607-ok.md"]
+    monkeypatch.setattr(murmur, "memos", lambda: [memo("cloud"), memo("ok")])
+    assert murmur.sync(out, None, False) == 0  # evicted is not a failure

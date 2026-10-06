@@ -134,13 +134,13 @@ def to_wav(src: Path):
     with tempfile.TemporaryDirectory() as d:
         wav = Path(d) / "a.wav"
         subprocess.run(["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(src),
-                        "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(wav)], capture_output=True, text=True, check=True)
+                        "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(wav)], capture_output=True, encoding="utf-8", errors="replace", check=True)
         yield wav
 
 
 def whisper(mdl: str, wav: Path, *args: str) -> tuple[str, str | None]:
     p = subprocess.run(["whisper-cli", "-m", mdl, "-f", str(wav), *args],
-                       capture_output=True, text=True, check=True)
+                       capture_output=True, encoding="utf-8", errors="replace", check=True)  # whisper.cpp can split UTF-8 at token edges
     m = re.search(r"auto-detected language: (\w+)", p.stderr)
     return "\n".join(l.strip() for l in p.stdout.splitlines() if l.strip()), m and m.group(1)
 
@@ -193,21 +193,20 @@ def sync(out: Path, since: date | None, force: bool) -> int:
         if (since and m["date"].date() < since) or m["id"] in done:
             continue
         try:
-            r = transcribe(m["path"], now - m["date"])
-        except Evicted:
-            print(f"evicted  {m['date']:%Y-%m-%d %H:%M}  {m['title']}  (audio in iCloud)")
-            continue
-        except subprocess.CalledProcessError as e:
+            if (r := transcribe(m["path"], now - m["date"])) is None:
+                continue  # young, no tsrp yet: Apple may still write one
+            dest = out / f"{m['date']:%Y-%m-%d-%H%M}-{slug(m['title'])}.md"
+            tmp = dest.with_suffix(".tmp")
+            tmp.write_text(render(m, *r))
+            os.replace(tmp, dest)
+            print(f"{r[1]:<8} {m['date']:%Y-%m-%d %H:%M}  {r[2] or '?'}  {dest.name}", flush=True)
+        except Evicted:  # not a failure: it syncs once Voice Memos downloads the audio
+            print(f"evicted  {m['date']:%Y-%m-%d %H:%M}  {m['title']}  (audio in iCloud)", flush=True)
+        except Exception as e:  # one bad memo must never abort the backlog
             failed += 1
-            print(f"failed   {m['date']:%Y-%m-%d %H:%M}  {m['title']}  ({e.cmd[0]} exit {e.returncode})")
-            continue
-        if r is None:
-            continue  # young, no tsrp yet: Apple may still write one
-        dest = out / f"{m['date']:%Y-%m-%d-%H%M}-{slug(m['title'])}.md"
-        tmp = dest.with_suffix(".tmp")
-        tmp.write_text(render(m, *r))
-        os.replace(tmp, dest)
-        print(f"{r[1]:<8} {m['date']:%Y-%m-%d %H:%M}  {r[2] or '?'}  {dest.name}")
+            why = (f"{e.cmd[0]} exit {e.returncode}" if isinstance(e, subprocess.CalledProcessError)
+                   else f"{type(e).__name__}: {e}")
+            print(f"failed   {m['date']:%Y-%m-%d %H:%M}  {m['title']}  ({why})", flush=True)
     return 1 if failed else 0
 
 
@@ -242,6 +241,8 @@ def main() -> None:
     except subprocess.CalledProcessError as e:
         why = (e.stderr or "").strip().splitlines()[-1:]
         sys.exit(f"murmur: {e.cmd[0]} failed (exit {e.returncode})" + "".join(f": {w}" for w in why))
+    except sqlite3.OperationalError as e:  # no Voice Memos library (not macOS) or no Full Disk Access
+        sys.exit(f"murmur: can't open {REC / 'CloudRecordings.db'} ({e}); macOS only, needs Full Disk Access")
     except FileNotFoundError as e:  # ffmpeg / whisper-cli not on PATH
         sys.exit(f"murmur: {e.filename or e} not found; run `murmur setup`")
 
