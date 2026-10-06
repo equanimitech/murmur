@@ -28,7 +28,7 @@ murmur setup                                # check tools, fetch the model if mi
 ## Claude Code skill
 
 ```text
-/plugin marketplace add equanimitech/claude-plugins
+/plugin marketplace add equanimitech/marketplace
 /plugin install murmur@equanimitech
 ```
 
