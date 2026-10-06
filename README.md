@@ -1,6 +1,6 @@
 # murmur
 
-Turns Apple Voice Memos (macOS) into markdown transcripts. Local only, stdlib only.
+**macOS only.** Turns Apple Voice Memos into markdown transcripts. Local only, stdlib only.
 
 Uses Apple's own transcript when it exists and the memo is English; otherwise transcribes with whisper.cpp.
 
