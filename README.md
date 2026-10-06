@@ -12,7 +12,7 @@ uv tool install git+https://github.com/equanimitech/murmur
 murmur setup
 ```
 
-`murmur setup` checks for `ffmpeg` and `whisper-cli`, then finds a whisper model or downloads `ggml-large-v3-turbo.bin` (~1.6 GB) into `~/Library/Application Support/murmur/`. It is idempotent. Model lookup order: `$MURMUR_MODEL` (used as-is when set), murmur's own folder, then a copy Vibe already downloaded, if any. `sync` and `transcribe` never download. With no model they exit non-zero and point to `murmur setup`.
+`murmur setup` checks for `ffmpeg` and `whisper-cli`, then finds a whisper model or downloads `ggml-large-v3-turbo.bin` (~1.6 GB) into `~/Library/Application Support/murmur/`. If a tool is missing it says which, skips the download and exits 1. It is idempotent. Model lookup order: `$MURMUR_MODEL` (used as-is when set), murmur's own folder, then a copy Vibe already downloaded, if any. `sync` and `transcribe` never download. With no model they exit non-zero and point to `murmur setup`.
 
 ## Usage
 
@@ -24,6 +24,17 @@ murmur setup                                # check tools, fetch the model if mi
 ```
 
 `sync` writes `DIR/YYYY-MM-DD-HHMM-<slug>.md` (default `~/Documents/murmur`) with frontmatter: `id`, `date`, `duration`, `title`, `source` (apple|whisper), `language`. It skips memos already written (unless `--force`), skips audio evicted to iCloud, and holds a lock in `DIR`, so a file watch can fire it repeatedly.
+
+## Claude Code skill
+
+```text
+/plugin marketplace add equanimitech/claude-plugins
+/plugin install murmur@equanimitech
+```
+
+Then say "sync my voice memos" or "review my memos" (or `/murmur`). The skill runs `murmur sync`, lists transcripts with no `reviewed:` field, newest first, and summarizes each one in its own language: gist, decisions, action items, ideas, people. On your OK it hands action items to a task tool you have connected and adds `reviewed: YYYY-MM-DD` to the frontmatter. Transcript content never leaves the session without your consent.
+
+No MCP server is included: the skill uses the CLI and the files directly.
 
 ## Caveats
 

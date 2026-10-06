@@ -100,3 +100,14 @@ def test_sync_continues_past_a_failing_memo(tmp_path, monkeypatch, capsys):
     assert [f.name for f in out.glob("*.md")] == ["2023-07-07-1607-ok.md"]
     monkeypatch.setattr(murmur, "memos", lambda: [memo("cloud"), memo("ok")])
     assert murmur.sync(out, None, False) == 0  # evicted is not a failure
+
+
+def test_setup_skips_download_when_tools_missing(monkeypatch, capsys):
+    monkeypatch.delenv("MURMUR_MODEL", raising=False)
+    monkeypatch.setattr(murmur.shutil, "which", lambda t: None if t == "whisper-cli" else "/bin/ffmpeg")
+    monkeypatch.setattr(murmur, "find_model", lambda: None)
+    monkeypatch.setattr(murmur, "download", lambda *a: pytest.fail("downloaded with tools missing"))
+    assert murmur.setup() == 1
+    log = capsys.readouterr().out
+    assert "missing  whisper-cli  ->  brew install whisper-cpp" in log and "ffmpeg" not in log
+    assert log.strip().endswith("install the tools above, then re-run `murmur setup`")

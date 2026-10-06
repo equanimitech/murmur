@@ -65,7 +65,7 @@ def download(url: str, dest: Path) -> None:
 
 
 def setup() -> int:
-    """Idempotent: check tools, fetch the model only if none resolves."""
+    """Idempotent: check tools, fetch the model only if none resolves and the tools are present."""
     brew = {"ffmpeg": "ffmpeg", "whisper-cli": "whisper-cpp"}
     missing = [t for t in brew if not shutil.which(t)]
     for t in missing:
@@ -75,11 +75,13 @@ def setup() -> int:
     elif env := os.environ.get("MURMUR_MODEL"):
         print(f"model    MURMUR_MODEL={env} does not exist; fix it or unset it")
         return 1
-    else:
+    elif not missing:  # no point pulling 1.6 GB the tools can't use yet
         dest = own_model()
         print(f"downloading {MODEL_URL} (~1.6 GB) -> {dest}")
         download(MODEL_URL, dest)
         print(f"model    {dest}")
+    if missing:
+        print("install the tools above, then re-run `murmur setup`")
     return 1 if missing else 0
 
 
