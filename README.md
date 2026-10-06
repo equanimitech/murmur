@@ -8,7 +8,7 @@ Uses Apple's own transcript when it exists and the memo is English; otherwise tr
 
 ```sh
 brew install whisper-cpp ffmpeg
-uv tool install git+<repo-url>   # no public remote yet; from a clone: uv tool install .
+uv tool install git+https://github.com/equanimitech/murmur
 murmur setup
 ```
 
